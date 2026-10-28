@@ -1,7 +1,8 @@
 (async () => {
 'use strict';
 const params=new URLSearchParams(location.search);
-const fixedCondition=document.body.dataset.condition;
+const pathCondition=/\/(hr|he|lr|le)\.html$/i.exec(new URL(location.href).pathname)?.[1]?.toUpperCase();
+const fixedCondition=pathCondition||document.body.dataset.condition;
 const condition=(fixedCondition||params.get('c')||params.get('group')||'').toUpperCase();
 const variant=window.FOMNEXX_CONDITIONS[condition];
 const isEntry=document.body.dataset.page==='entry';
@@ -25,21 +26,16 @@ if(preview){
 const config=window.FOMNEXX_CONFIG;
 let pid=params.get('pid')||null;
 if(pid!==null&&!/^[A-Za-z0-9_-]{1,128}$/.test(pid)){fail('匿名编号格式无效，请检查收到的链接。');return;}
-let id,storageKey,state;
+// pid is solely supplied by Credamo. A visit UUID is not a participant ID.
+const id=crypto.randomUUID();
+let storageKey,state;
 try{
- if(pid){
-  const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('fomnexx-factorial-v1:'+pid)));
-  bytes[6]=(bytes[6]&15)|80;bytes[8]=(bytes[8]&63)|128;
-  const h=Array.from(bytes.slice(0,16),b=>b.toString(16).padStart(2,'0')).join('');
-  id=h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
- }else{
-  id=localStorage.getItem('fomnexx-factorial-v1-id');
-  if(!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id||'')){id=crypto.randomUUID();localStorage.setItem('fomnexx-factorial-v1-id',id);}
- }
- storageKey='fomnexx-factorial-v1-state-'+id;
- state=JSON.parse(localStorage.getItem(storageKey)||'null');
- if(state&&state.condition!==condition){fail('此浏览器已打开另一份产品链接，请继续使用最初收到的链接。');return;}
- if(!state)state={id,condition,queue:[],answered:false,durationVersion:1};
+ let browserKey=localStorage.getItem('fomnexx-missing-pid-browser');
+ if(!pid&&!browserKey){browserKey=crypto.randomUUID();localStorage.setItem('fomnexx-missing-pid-browser',browserKey);}
+ storageKey='fomnexx-factorial-v4:'+condition+':'+(pid?'pid:'+pid:'missing:'+browserKey);
+ state=JSON.parse(localStorage.getItem(storageKey)||'null')||{queue:[],answered:false,durationVersion:1};
+ // Keep pending events with their original visit ID across refreshes.
+ state.id=id;state.condition=condition;
  localStorage.setItem(storageKey,JSON.stringify(state));
 }catch{fail('请允许浏览器本地存储后重新打开页面。');return;}
   // Version 1: visible time only. Separate requests never block choices.
@@ -74,22 +70,23 @@ try{
   let flushing = false;
   let retry;
   const save = () => localStorage.setItem(storageKey, JSON.stringify(state));
-  const enqueue = (event) => { if (!state.queue.includes(event)) state.queue.push(event); save(); void flush(); };
+  const enqueue = (event) => { if (!state.queue.some(x=>x.event===event&&x.visit===id)) state.queue.push({event,visit:id}); save(); void flush(); };
   async function flush() {
     if (flushing) return;
     flushing = true;
     clearTimeout(retry);
     try {
       while (state.queue.length) {
-        const event = state.queue[0];
+        const item = state.queue[0];
+        const event = item.event;
         const response = preview ? { ok: true } : await fetch(`${config.supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/fomnexx_factorial_record_event`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', apikey: config.supabaseKey },
-          body: JSON.stringify({ p_session: state.id, p_condition: condition, p_event: event, p_pid: pid }),
+          body: JSON.stringify({ p_session: item.visit, p_condition: condition, p_event: event, p_pid: pid }),
           credentials: 'omit', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(12000)
         });
         if (!response.ok) throw new Error(`Event recording failed (${response.status})`);
         state.queue.shift();
-        if (event === 'page_view') { durationReady = true; checkpointDuration(); }
+        if (event === 'page_view' && item.visit === id) { durationReady = true; checkpointDuration(); }
         if (event === 'clicked_yes' || event === 'clicked_no') {
           state.answered = true;
           dialog.close();
@@ -99,11 +96,11 @@ try{
         save();
       }
     } catch {
-      if (state.queue.some(e => e.startsWith('clicked_'))) status.textContent = '您的选择正在等待保存，请保持页面打开，我们会自动重试。';
+      if (state.queue.some(e => e.event.startsWith('clicked_'))) status.textContent = '您的选择正在等待保存，请保持页面打开，我们会自动重试。';
       retry = setTimeout(flush, 4000);
     } finally { flushing = false; }
   }
-  // Idempotent in the database: reloads count as one visit within a session.
+  // One UUID per page load preserves repeat visits; retries for that visit stay idempotent.
   // Render immediately; persist entry activation and page view in order in the background.
   if(isEntry) enqueue('click');
   enqueue('page_view');
@@ -112,13 +109,13 @@ try{
     if (state.answered) return;
     dialog.showModal();
     enqueue('popup_shown');
-    if (state.queue.some(e => e.startsWith('clicked_'))) {
+    if (state.queue.some(e => e.event.startsWith('clicked_'))) {
       buttons.forEach(b => { b.disabled = true; });
       status.textContent = '正在保存您的选择…';
     }
   }, 2500);
   function choose(event) {
-    if (state.answered || state.queue.some(e => e.startsWith('clicked_'))) return;
+    if (state.answered || state.queue.some(e => e.event.startsWith('clicked_'))) return;
     buttons.forEach(b => { b.disabled = true; });
     status.textContent = '正在保存您的选择…';
     enqueue(event);
