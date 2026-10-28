@@ -1,14 +1,13 @@
 (async () => {
 'use strict';
 const params=new URLSearchParams(location.search);
-const condition=(params.get('c')||'').toUpperCase();
+const condition=(params.get('c')||params.get('group')||'').toUpperCase();
 const variant=window.FOMNEXX_CONDITIONS[condition];
 const isEntry=document.body.dataset.page==='entry';
 const preview=params.get('test')==='1';
 function fail(message){document.body.textContent=message;}
 if(!variant){fail('此链接无效，请使用收到的产品链接。');return;}
-const destination=new URL('product.html',location.href);destination.search=params.toString();
-if(!isEntry){
+{
  const copy=window.FOMNEXX_COPY[variant.appeal];
  const heading=document.getElementById('ad-title');heading.replaceChildren(document.createTextNode(copy.title[0]),document.createElement('br'));
  const em=document.createElement('em');em.textContent=copy.title[1];heading.append(em);
@@ -16,7 +15,6 @@ if(!isEntry){
  document.querySelector('figure img').src='./'+variant.image;
 }
 if(preview){
- if(isEntry){location.replace(destination.href);return;}
  const notice=document.createElement('div');notice.className='test-notice';notice.textContent='TEST MODE · 测试模式，不记录数据';
  const restart=document.createElement('button');restart.textContent='重新测试';restart.addEventListener('click',()=>location.reload());notice.append(restart);document.body.prepend(notice);
  const dialog=document.getElementById('updates');dialog.addEventListener('cancel',e=>e.preventDefault());
@@ -43,23 +41,6 @@ try{
  if(!state)state={id,condition,queue:[],answered:false,durationVersion:1};
  localStorage.setItem(storageKey,JSON.stringify(state));
 }catch{fail('请允许浏览器本地存储后重新打开页面。');return;}
-if(isEntry){
- if(!state.queue.includes('click'))state.queue.push('click');
- const persist=()=>localStorage.setItem(storageKey,JSON.stringify(state));persist();
- async function openProduct(){
-  try{
-   // An entry visit is evidence of the external link activation, not an on-page details click.
-   while(state.queue.length){const event=state.queue[0];
-    const response=await fetch(config.supabaseUrl+'/rest/v1/rpc/fomnexx_factorial_record_event',{
-     method:'POST',headers:{'Content-Type':'application/json',apikey:config.supabaseKey},credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(12000),
-     body:JSON.stringify({p_session:id,p_condition:condition,p_event:event,p_pid:pid})});
-    if(!response.ok)throw Error('save');state.queue.shift();persist();
-   }
-   location.replace(destination.href);
-  }catch{document.getElementById('entry-status').textContent='连接暂时不稳定，正在重试打开产品页面…';setTimeout(openProduct,4000);}
- }
- void openProduct();return;
-}
   // Version 1: visible time only. Separate requests never block choices.
   const durationPage = crypto.randomUUID();
   let durationTotal = 0, durationSeq = 0, durationReady = false;
@@ -122,6 +103,8 @@ if(isEntry){
     } finally { flushing = false; }
   }
   // Idempotent in the database: reloads count as one visit within a session.
+  // Render immediately; persist entry activation and page view in order in the background.
+  if(isEntry) enqueue('click');
   enqueue('page_view');
   dialog.addEventListener('cancel', e => e.preventDefault()); // Neither Escape nor backdrop implies “No”.
   setTimeout(() => {
