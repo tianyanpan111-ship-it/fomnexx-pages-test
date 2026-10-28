@@ -1,13 +1,14 @@
 (async () => {
 'use strict';
 const params=new URLSearchParams(location.search);
-const condition=(params.get('c')||params.get('group')||'').toUpperCase();
+const fixedCondition=document.body.dataset.condition;
+const condition=(fixedCondition||params.get('c')||params.get('group')||'').toUpperCase();
 const variant=window.FOMNEXX_CONDITIONS[condition];
 const isEntry=document.body.dataset.page==='entry';
 const preview=params.get('test')==='1';
 function fail(message){document.body.textContent=message;}
 if(!variant){fail('此链接无效，请使用收到的产品链接。');return;}
-{
+if(!fixedCondition){
  const copy=window.FOMNEXX_COPY[variant.appeal];
  const heading=document.getElementById('ad-title');heading.replaceChildren(document.createTextNode(copy.title[0]),document.createElement('br'));
  const em=document.createElement('em');em.textContent=copy.title[1];heading.append(em);
